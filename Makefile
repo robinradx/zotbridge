@@ -28,7 +28,7 @@ version:
 	$(PYTHON) scripts/bump_version.py $(VERSION)
 
 release-check: test-venv
-	$(PYTHON) -m compileall src/zotero_headless tests scripts
+	$(PYTHON) -m compileall src/zotbridge tests scripts
 	PYTHONPATH=src $(VENV_TEST_PY) -m unittest discover -s tests
 	$(BUILD_PYTHON) -m build --no-isolation
 
@@ -73,8 +73,8 @@ release:
 	@if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=0.3.1"; exit 1; fi
 	$(MAKE) version VERSION=$(VERSION)
 	$(MAKE) release-check
-	@if ! git diff --quiet -- pyproject.toml src/zotero_headless/__init__.py; then \
-	  git add pyproject.toml src/zotero_headless/__init__.py; \
+	@if ! git diff --quiet -- pyproject.toml src/zotbridge/__init__.py; then \
+	  git add pyproject.toml src/zotbridge/__init__.py; \
 	  git commit -m "Bump version to $(VERSION)"; \
 	fi
 	git push origin main

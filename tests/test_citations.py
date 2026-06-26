@@ -3,10 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from zotero_headless.citations import CitationExportClient
-from zotero_headless.config import Settings
-from zotero_headless.core import CanonicalStore, EntityType
-from zotero_headless.qmd import QmdAutoIndexer
+from zotbridge.citations import CitationExportClient
+from zotbridge.config import Settings
+from zotbridge.core import CanonicalStore, EntityType
+from zotbridge.qmd import QmdAutoIndexer
 
 
 class FakeCitationExportClient:

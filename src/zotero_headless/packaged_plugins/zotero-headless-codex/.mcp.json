@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "zotero-headless": {
-      "command": "zotero-headless-mcp",
-      "args": []
-    }
-  }
-}

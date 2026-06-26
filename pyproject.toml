@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "zotero-headless"
-version = "1.1.7"
-description = "Headless Zotero-compatible runtime with CLI, HTTP API, MCP, local desktop interoperability, web sync, qmd-backed semantic search, and support for your agent tool of choice"
+name = "zotbridge"
+version = "1.2.0"
+description = "A Zotero integration layer for agents, apps, and scripts, with Web API sync, HTTP/MCP access, semantic search over libraries, and recoverable headless state."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -18,26 +18,17 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/robinradx/zotero-headless"
-Repository = "https://github.com/robinradx/zotero-headless"
-Issues = "https://github.com/robinradx/zotero-headless/issues"
+Homepage = "https://github.com/robinradx/zotbridge"
+Repository = "https://github.com/robinradx/zotbridge"
+Issues = "https://github.com/robinradx/zotbridge/issues"
 
 [project.scripts]
-zotero-headless = "zotero_headless.cli:main"
-zotero-headless-daemon = "zotero_headless.daemon:main"
-zotero-headless-mcp = "zotero_headless.mcp:main"
-zhl = "zotero_headless.cli:main"
-zhl-daemon = "zotero_headless.daemon:main"
-zhl-mcp = "zotero_headless.mcp:main"
+zotbridge = "zotbridge.cli:main"
+zotbridge-daemon = "zotbridge.daemon:main"
+zotbridge-mcp = "zotbridge.mcp:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-
-[tool.setuptools.package-data]
-zotero_headless = [
-  "packaged_plugins/**/*",
-  "packaged_plugins/**/.*",
-]
 
 [tool.setuptools.packages.find]
 where = ["src"]

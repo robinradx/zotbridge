@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from zotero_headless.core import CanonicalStore, ChangeType, EntityType
+from zotbridge.core import CanonicalStore, ChangeType, EntityType
 
 
 class CanonicalStoreTests(unittest.TestCase):

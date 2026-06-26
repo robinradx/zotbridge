@@ -1,0 +1,623 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from typing import Any
+
+from .adapters.web_sync import CanonicalWebSyncAdapter
+from .capabilities import get_capabilities
+from .config import Settings
+from .core import CanonicalStore, EntityType
+from .daemon import current_daemon_status
+from .library_routing import merged_libraries, prefers_canonical_reads
+from .qmd import QmdAutoIndexer, QmdClient
+from .recovery import RecoveryService
+from .service import BridgeService
+from .store import MirrorStore
+from .sync import SyncService
+from .web_api import ZoteroWebClient
+from .config import load_settings
+from . import __version__
+
+
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+
+
+TOOLS = [
+    {
+        "name": "zotero_list_libraries",
+        "description": "List all libraries across the mirror and canonical store.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_core_status",
+        "description": "Report status of the canonical store.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_core_libraries",
+        "description": "List libraries in the canonical store.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_core_changes",
+        "description": "List canonical store change-log entries, optionally filtered by library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+    },
+    {
+        "name": "zotero_recovery_repositories",
+        "description": "List configured recovery repositories, including local snapshots and external backup targets.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_recovery_snapshot_create",
+        "description": "Create an immutable recovery snapshot of the canonical store, files, qmd export, and citation export.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string"}},
+        },
+    },
+    {
+        "name": "zotero_recovery_snapshot_list",
+        "description": "List local recovery snapshots.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "default": 20}},
+        },
+    },
+    {
+        "name": "zotero_recovery_snapshot_verify",
+        "description": "Verify the integrity of a local recovery snapshot.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"snapshot_id": {"type": "string"}},
+            "required": ["snapshot_id"],
+        },
+    },
+    {
+        "name": "zotero_recovery_restore_plan",
+        "description": "Compute a restore plan for a snapshot, optionally scoped to one library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "snapshot_id": {"type": "string"},
+                "library_id": {"type": "string"},
+            },
+            "required": ["snapshot_id"],
+        },
+    },
+    {
+        "name": "zotero_recovery_restore_list",
+        "description": "List recorded restore runs and their current status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "default": 20}},
+        },
+    },
+    {
+        "name": "zotero_recovery_restore_show",
+        "description": "Get one recorded restore run by ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"run_id": {"type": "string"}},
+            "required": ["run_id"],
+        },
+    },
+    {
+        "name": "zotero_recovery_restore_execute",
+        "description": "Execute a recovery restore. Requires confirm=true and supports full-state or library-scoped restore.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "snapshot_id": {"type": "string"},
+                "library_id": {"type": "string"},
+                "confirm": {"type": "boolean"},
+                "push_remote": {"type": "boolean"},
+            },
+            "required": ["snapshot_id", "confirm"],
+        },
+    },
+    {
+        "name": "zotero_capabilities",
+        "description": "Report currently available capabilities and configured paths.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_daemon_status",
+        "description": "Report the current status of the planned Zotero-backed daemon runtime.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_list_items",
+        "description": "List items in a library from the mirror or canonical store.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+                "query": {"type": "string"},
+            },
+            "required": ["library_id"],
+        },
+    },
+    {
+        "name": "zotero_list_collections",
+        "description": "List collections in a library from the mirror or canonical store.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+                "query": {"type": "string"},
+            },
+            "required": ["library_id"],
+        },
+    },
+    {
+        "name": "zotero_get_item",
+        "description": "Get a single item by key from the mirror or canonical store.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}, "item_key": {"type": "string"}},
+            "required": ["library_id", "item_key"],
+        },
+    },
+    {
+        "name": "zotero_get_collection",
+        "description": "Get a single collection by key from the mirror or canonical store.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}, "collection_key": {"type": "string"}},
+            "required": ["library_id", "collection_key"],
+        },
+    },
+    {
+        "name": "zotero_sync_mirror_discover",
+        "description": "Discover remote Zotero libraries and register them in the mirror via the Zotero Web API.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_sync_mirror_pull",
+        "description": "Pull a remote Zotero library into the mirror via the Zotero Web API.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}},
+            "required": ["library_id"],
+        },
+    },
+    {
+        "name": "zotero_sync_discover",
+        "description": "Discover remote Zotero libraries and register them in the canonical store.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zotero_sync_pull",
+        "description": "Pull a remote Zotero library into the canonical store via the Zotero Web API.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}},
+            "required": ["library_id"],
+        },
+    },
+    {
+        "name": "zotero_sync_push",
+        "description": "Push pending canonical store changes for a remote Zotero library to the Zotero Web API.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}},
+            "required": ["library_id"],
+        },
+    },
+    {
+        "name": "zotero_sync_conflicts",
+        "description": "List unresolved sync conflicts for a library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "entity_type": {"type": "string", "enum": ["item", "collection"]},
+            },
+            "required": ["library_id"],
+        },
+    },
+    {
+        "name": "zotero_sync_conflict_rebase",
+        "description": "Resolve a sync conflict by keeping the local payload but rebasing it onto the latest remote version.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "entity_type": {"type": "string", "enum": ["item", "collection"]},
+                "entity_key": {"type": "string"},
+            },
+            "required": ["library_id", "entity_type", "entity_key"],
+        },
+    },
+    {
+        "name": "zotero_sync_conflict_accept_remote",
+        "description": "Resolve a sync conflict by accepting the latest remote payload and discarding the local pending version.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "entity_type": {"type": "string", "enum": ["item", "collection"]},
+                "entity_key": {"type": "string"},
+            },
+            "required": ["library_id", "entity_type", "entity_key"],
+        },
+    },
+    {
+        "name": "zotero_qmd_query",
+        "description": "Run qmd hybrid semantic search over exported Zotero Markdown.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "library_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "zotero_qmd_vsearch",
+        "description": "Run qmd vector search over exported Zotero Markdown.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "library_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "zotero_qmd_search",
+        "description": "Run qmd keyword search over exported Zotero Markdown.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "library_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "zotero_qmd_get",
+        "description": "Recover the exported Markdown source behind a qmd search hit, doc id, qmd URI, or path.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+                "line_from": {"type": "integer"},
+                "line_count": {"type": "integer"},
+            },
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "zotero_qmd_doctor",
+        "description": "Inspect local qmd availability, version, and runtime health.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "zotero_create_item",
+        "description": "Create an item in a remote or headless Zotero library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}, "item": {"type": "object"}},
+            "required": ["library_id", "item"],
+        },
+    },
+    {
+        "name": "zotero_update_item",
+        "description": "Update an existing item in a remote or headless Zotero library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "item_key": {"type": "string"},
+                "patch": {"type": "object"},
+            },
+            "required": ["library_id", "item_key", "patch"],
+        },
+    },
+    {
+        "name": "zotero_delete_item",
+        "description": "Delete an item from a remote or headless Zotero library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}, "item_key": {"type": "string"}},
+            "required": ["library_id", "item_key"],
+        },
+    },
+    {
+        "name": "zotero_create_collection",
+        "description": "Create a collection in a remote or headless Zotero library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}, "collection": {"type": "object"}},
+            "required": ["library_id", "collection"],
+        },
+    },
+    {
+        "name": "zotero_update_collection",
+        "description": "Update an existing collection in a remote or headless Zotero library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "library_id": {"type": "string"},
+                "collection_key": {"type": "string"},
+                "patch": {"type": "object"},
+            },
+            "required": ["library_id", "collection_key", "patch"],
+        },
+    },
+    {
+        "name": "zotero_delete_collection",
+        "description": "Delete a collection from a remote or headless Zotero library.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"library_id": {"type": "string"}, "collection_key": {"type": "string"}},
+            "required": ["library_id", "collection_key"],
+        },
+    },
+]
+
+
+def _result(payload: Any) -> dict[str, Any]:
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(payload, indent=2, sort_keys=True),
+            }
+        ]
+    }
+
+
+def run_stdio_server(settings: Settings) -> None:
+    canonical = CanonicalStore(settings.resolved_canonical_db())
+    store = MirrorStore(settings.resolved_mirror_db())
+    qmd_indexer = QmdAutoIndexer(settings)
+    sync_service = SyncService(settings, store, qmd_indexer=qmd_indexer)
+    service = BridgeService(settings, store, canonical, qmd_indexer=qmd_indexer)
+    qmd = QmdClient(settings)
+    recovery = RecoveryService(settings, canonical=canonical, qmd_indexer=qmd_indexer)
+
+    def canonical_sync() -> CanonicalWebSyncAdapter:
+        return CanonicalWebSyncAdapter(canonical, ZoteroWebClient(settings), qmd_indexer=qmd_indexer)
+
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            message = json.loads(line)
+            method = message.get("method")
+            msg_id = message.get("id")
+            params = message.get("params") or {}
+
+            if method == "initialize":
+                requested_protocol = str(params.get("protocolVersion") or "")
+                protocol_version = (
+                    requested_protocol
+                    if requested_protocol in SUPPORTED_PROTOCOL_VERSIONS
+                    else SUPPORTED_PROTOCOL_VERSIONS[0]
+                )
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "protocolVersion": protocol_version,
+                        "capabilities": {"tools": {"listChanged": False}},
+                        "serverInfo": {"name": "zotbridge", "version": __version__},
+                    },
+                }
+            elif method == "notifications/initialized":
+                continue
+            elif method == "ping":
+                response = {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+            elif method == "tools/list":
+                response = {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
+            elif method == "tools/call":
+                name = params["name"]
+                arguments = params.get("arguments") or {}
+                if name == "zotero_capabilities":
+                    payload = get_capabilities(settings)
+                elif name == "zotero_daemon_status":
+                    payload = current_daemon_status(settings).to_dict()
+                elif name == "zotero_core_status":
+                    payload = canonical.status()
+                elif name == "zotero_core_libraries":
+                    payload = canonical.list_libraries()
+                elif name == "zotero_core_changes":
+                    payload = canonical.list_changes(
+                        library_id=arguments.get("library_id"),
+                        limit=int(arguments.get("limit", 20)),
+                    )
+                elif name == "zotero_recovery_repositories":
+                    payload = recovery.repositories()
+                elif name == "zotero_recovery_snapshot_create":
+                    payload = recovery.create_snapshot(reason=str(arguments.get("reason") or "manual"))
+                elif name == "zotero_recovery_snapshot_list":
+                    payload = recovery.list_snapshots(limit=int(arguments.get("limit", 20)))
+                elif name == "zotero_recovery_snapshot_verify":
+                    payload = recovery.verify_snapshot(arguments["snapshot_id"])
+                elif name == "zotero_recovery_restore_plan":
+                    payload = recovery.plan_restore(
+                        snapshot_id=arguments["snapshot_id"],
+                        library_id=arguments.get("library_id"),
+                    )
+                elif name == "zotero_recovery_restore_list":
+                    payload = recovery.list_restore_runs(limit=int(arguments.get("limit", 20)))
+                elif name == "zotero_recovery_restore_show":
+                    payload = recovery.get_restore_run(arguments["run_id"])
+                elif name == "zotero_recovery_restore_execute":
+                    payload = recovery.execute_restore(
+                        snapshot_id=arguments["snapshot_id"],
+                        library_id=arguments.get("library_id"),
+                        confirm=bool(arguments.get("confirm")),
+                        push_remote=bool(arguments.get("push_remote")),
+                    )
+                elif name == "zotero_list_libraries":
+                    payload = merged_libraries(store, canonical)
+                elif name == "zotero_list_items":
+                    if prefers_canonical_reads(canonical, arguments["library_id"]):
+                        payload = canonical.list_entities(
+                            arguments["library_id"],
+                            "item",
+                            limit=int(arguments.get("limit", 20)),
+                            query=arguments.get("query"),
+                        )
+                    else:
+                        payload = store.list_objects(
+                            arguments["library_id"],
+                            "item",
+                            limit=int(arguments.get("limit", 20)),
+                            query=arguments.get("query"),
+                        )
+                elif name == "zotero_list_collections":
+                    if prefers_canonical_reads(canonical, arguments["library_id"]):
+                        payload = canonical.list_entities(
+                            arguments["library_id"],
+                            "collection",
+                            limit=int(arguments.get("limit", 20)),
+                            query=arguments.get("query"),
+                        )
+                    else:
+                        payload = store.list_objects(
+                            arguments["library_id"],
+                            "collection",
+                            limit=int(arguments.get("limit", 20)),
+                            query=arguments.get("query"),
+                        )
+                elif name == "zotero_get_item":
+                    payload = (
+                        canonical.get_entity(arguments["library_id"], "item", arguments["item_key"])
+                        if prefers_canonical_reads(canonical, arguments["library_id"])
+                        else store.get_object(arguments["library_id"], "item", arguments["item_key"])
+                    )
+                elif name == "zotero_get_collection":
+                    payload = (
+                        canonical.get_entity(arguments["library_id"], "collection", arguments["collection_key"])
+                        if prefers_canonical_reads(canonical, arguments["library_id"])
+                        else store.get_object(arguments["library_id"], "collection", arguments["collection_key"])
+                    )
+                elif name == "zotero_sync_discover":
+                    payload = canonical_sync().discover_libraries()
+                elif name == "zotero_sync_pull":
+                    payload = canonical_sync().pull_library(arguments["library_id"])
+                elif name == "zotero_sync_push":
+                    payload = canonical_sync().push_changes(arguments["library_id"])
+                elif name == "zotero_sync_mirror_discover":
+                    payload = sync_service.discover_remote_libraries()
+                elif name == "zotero_sync_mirror_pull":
+                    payload = sync_service.sync_remote_library(arguments["library_id"]).__dict__
+                elif name == "zotero_sync_conflicts":
+                    payload = canonical_sync().list_conflicts(
+                        arguments["library_id"],
+                        entity_type=EntityType(arguments["entity_type"]) if arguments.get("entity_type") else None,
+                    )
+                elif name == "zotero_sync_conflict_rebase":
+                    payload = canonical_sync().rebase_conflict_keep_local(
+                        arguments["library_id"],
+                        EntityType(arguments["entity_type"]),
+                        arguments["entity_key"],
+                    )
+                elif name == "zotero_sync_conflict_accept_remote":
+                    payload = canonical_sync().accept_remote_conflict(
+                        arguments["library_id"],
+                        EntityType(arguments["entity_type"]),
+                        arguments["entity_key"],
+                    )
+                elif name == "zotero_qmd_query":
+                    payload = qmd.search(
+                        "query",
+                        arguments["query"],
+                        limit=int(arguments.get("limit", 10)),
+                        library_id=arguments.get("library_id"),
+                    )
+                elif name == "zotero_qmd_vsearch":
+                    payload = qmd.search(
+                        "vsearch",
+                        arguments["query"],
+                        limit=int(arguments.get("limit", 10)),
+                        library_id=arguments.get("library_id"),
+                    )
+                elif name == "zotero_qmd_search":
+                    payload = qmd.search(
+                        "search",
+                        arguments["query"],
+                        limit=int(arguments.get("limit", 10)),
+                        library_id=arguments.get("library_id"),
+                    )
+                elif name == "zotero_qmd_get":
+                    payload = qmd.get(
+                        arguments["target"],
+                        line_from=arguments.get("line_from"),
+                        line_count=arguments.get("line_count"),
+                    )
+                elif name == "zotero_qmd_doctor":
+                    payload = qmd.doctor()
+                elif name == "zotero_create_item":
+                    payload = service.create_item(arguments["library_id"], arguments["item"])
+                elif name == "zotero_update_item":
+                    payload = service.update_item(arguments["library_id"], arguments["item_key"], arguments["patch"])
+                elif name == "zotero_delete_item":
+                    payload = service.delete_item(arguments["library_id"], arguments["item_key"])
+                elif name == "zotero_create_collection":
+                    payload = service.create_collection(arguments["library_id"], arguments["collection"])
+                elif name == "zotero_update_collection":
+                    payload = service.update_collection(
+                        arguments["library_id"],
+                        arguments["collection_key"],
+                        arguments["patch"],
+                    )
+                elif name == "zotero_delete_collection":
+                    payload = service.delete_collection(arguments["library_id"], arguments["collection_key"])
+                else:
+                    raise ValueError(f"Unknown tool: {name}")
+                response = {"jsonrpc": "2.0", "id": msg_id, "result": _result(payload)}
+            else:
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {"code": -32601, "message": f"Unknown method: {method}"},
+                }
+        except Exception as exc:
+            response = {
+                "jsonrpc": "2.0",
+                "id": message.get("id") if isinstance(locals().get("message"), dict) else None,
+                "error": {"code": -32000, "message": str(exc)},
+            }
+        sys.stdout.write(json.dumps(response) + "\n")
+        sys.stdout.flush()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="zotbridge-mcp")
+    parser.add_argument("--profile", help="Load settings for the named profile.")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    run_stdio_server(load_settings(profile=args.profile))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

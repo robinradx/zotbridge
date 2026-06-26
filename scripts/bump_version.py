@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = [
     (ROOT / "pyproject.toml", r'(^version = ")[^"]+(")', r"\g<1>{version}\g<2>"),
-    (ROOT / "src" / "zotero_headless" / "__init__.py", r'(^__version__ = ")[^"]+(")', r"\g<1>{version}\g<2>"),
+    (ROOT / "src" / "zotbridge" / "__init__.py", r'(^__version__ = ")[^"]+(")', r"\g<1>{version}\g<2>"),
 ]
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -37,7 +37,7 @@ def bump_version(version: str) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Bump zotero-headless version references")
+    parser = argparse.ArgumentParser(description="Bump zotbridge version references")
     parser.add_argument("version", help="New semantic version, e.g. 0.3.1")
     return parser
 

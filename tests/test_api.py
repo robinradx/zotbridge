@@ -1,8 +1,8 @@
 import tempfile
 import unittest
 
-from zotero_headless.config import Settings
-from zotero_headless.observability import (
+from zotbridge.config import Settings
+from zotbridge.observability import (
     build_metrics_text,
     initialize_runtime_state,
     read_jobs_state,
@@ -52,9 +52,9 @@ class ApiObservabilityTests(unittest.TestCase):
             self.assertTrue(str(runtime_state["events_log_path"]).endswith("events.jsonl"))
             self.assertTrue(jobs_state["background_sync"]["enabled"])
             self.assertEqual(jobs_state["background_sync"]["interval_seconds"], 60)
-            self.assertIn("zotero_headless_runtime_running 1", metrics_payload)
-            self.assertIn("zotero_headless_http_requests_total 2", metrics_payload)
-            self.assertIn("zotero_headless_background_sync_enabled 1", metrics_payload)
+            self.assertIn("zotbridge_runtime_running 1", metrics_payload)
+            self.assertIn("zotbridge_http_requests_total 2", metrics_payload)
+            self.assertIn("zotbridge_background_sync_enabled 1", metrics_payload)
 
 
 if __name__ == "__main__":

@@ -4,10 +4,10 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from zotero_headless.adapters.web_sync import CanonicalWebSyncAdapter
-from zotero_headless.config import Settings
-from zotero_headless.core import CanonicalStore, ChangeType, EntityType
-from zotero_headless.web_api import ZoteroApiError
+from zotbridge.adapters.web_sync import CanonicalWebSyncAdapter
+from zotbridge.config import Settings
+from zotbridge.core import CanonicalStore, ChangeType, EntityType
+from zotbridge.web_api import ZoteroApiError
 
 
 class FakeWebClient:

@@ -1,9 +1,10 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from zotero_headless.config import DEFAULT_PROFILE, Settings, load_settings, save_settings, set_default_profile
-from zotero_headless.utils import default_state_dir, read_json
+from zotbridge.config import DEFAULT_PROFILE, Settings, load_settings, save_settings, set_default_profile
+from zotbridge.utils import default_state_dir, read_json
 
 
 class ConfigProfilesTests(unittest.TestCase):
@@ -28,6 +29,17 @@ class ConfigProfilesTests(unittest.TestCase):
             self.assertEqual(settings.api_key, "bob-key")
             self.assertEqual(settings.selected_profile, "bob")
             self.assertEqual(settings.resolved_state_dir(), default_state_dir("bob"))
+
+    def test_load_settings_honors_state_dir_environment_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            state_dir = Path(tmp) / "runtime-state"
+
+            with patch.dict("os.environ", {"ZOTBRIDGE_STATE_DIR": str(state_dir)}, clear=False):
+                settings = load_settings(path=path)
+
+            self.assertEqual(settings.resolved_state_dir(), state_dir)
+            self.assertTrue(state_dir.exists())
 
     def test_save_settings_creates_profiled_config_for_first_named_profile(self):
         with tempfile.TemporaryDirectory() as tmp:

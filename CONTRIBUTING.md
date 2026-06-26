@@ -7,7 +7,7 @@ This project is open source, pre-release, and intentionally transparent about it
 - keep the repo debuggable
 - prefer reproducible behavior over hiding complexity
 - keep Zotero-specific behavior isolated to adapters where possible
-- treat the canonical headless store as the system of record
+- treat the canonical zotbridge store as the system of record
 - use qmd as a derived index, not primary storage
 
 ## Local Development
@@ -21,16 +21,16 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 Compile-check:
 
 ```bash
-python3 -m compileall src/zotero_headless tests
+python3 -m compileall src/zotbridge tests
 ```
 
 Useful runtime commands:
 
 ```bash
-zotero-headless capabilities
-zotero-headless daemon status
-zotero-headless doctor
-zotero-headless setup list
+zotbridge capabilities
+zotbridge daemon status
+zotbridge doctor
+zotbridge setup list
 ```
 
 ## Workspace Hygiene
@@ -43,14 +43,6 @@ Keep personal or tool-local material in ignored directories such as:
 - `.tmp/`
 
 Those are intentionally excluded from version control.
-
-## Desktop Helper Workflow
-
-The repo does not vendor Zotero source anymore. If you work on the optional desktop-helper path:
-
-- update `desktop_helper/metadata.json` with the upstream Zotero commit or tag you validated against
-- keep the helper delta as explicit patch files under `desktop_helper/patches/`
-- document any behavior assumptions that depend on those patches in the relevant code and docs
 
 ## Tests And Scope
 

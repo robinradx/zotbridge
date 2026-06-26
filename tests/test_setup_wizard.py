@@ -1,20 +1,9 @@
 import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-from zotero_headless.config import Settings
-from zotero_headless.core import CanonicalStore
-from zotero_headless.setup_wizard import run_setup_wizard
-
-
-class FakeDiscoveredSettings:
-    def __init__(self, *, data_dir=None, zotero_bin=None):
-        self.data_dir = data_dir
-        self.zotero_bin = zotero_bin
-
-    def to_dict(self):
-        return {"data_dir": self.data_dir, "zotero_bin": self.zotero_bin}
+from zotbridge.config import Settings
+from zotbridge.core import CanonicalStore
+from zotbridge.setup_wizard import run_setup_wizard
 
 
 class FakeWizardClient:
@@ -58,29 +47,16 @@ class FakeAlternateAccountClient(FakeWizardClient):
 
 
 class SetupWizardTests(unittest.TestCase):
-    def test_local_only_wizard_keeps_remote_selection_empty(self):
+    def test_full_wizard_can_skip_remote_sync(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(state_dir=tmp)
-            answers = iter(
-                [
-                    str(Path(tmp) / "Zotero"),
-                    "",
-                    "",
-                    "127.0.0.1",
-                    "8787",
-                    "zotero-headless",
-                ]
-            )
+            answers = iter(["n", "127.0.0.1", "8787", "zotbridge"])
 
-            with patch(
-                "zotero_headless.setup_wizard.autodiscover_settings",
-                return_value=FakeDiscoveredSettings(),
-            ):
-                result = run_setup_wizard(
-                    settings,
-                    input_fn=lambda _: next(answers),
-                    secret_fn=lambda _: "",
-                )
+            result = run_setup_wizard(
+                settings,
+                input_fn=lambda _: next(answers),
+                secret_fn=lambda _: "",
+            )
 
             self.assertIsNone(result.settings.api_key)
             self.assertEqual(result.settings.remote_library_ids, [])
@@ -90,32 +66,17 @@ class SetupWizardTests(unittest.TestCase):
     def test_remote_wizard_discovers_and_selects_all_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(state_dir=tmp)
-            answers = iter(
-                [
-                    str(Path(tmp) / "Zotero"),
-                    "",
-                    "y",
-                    "",
-                    "",
-                    "",
-                    "127.0.0.1",
-                    "8787",
-                    "zotero-headless",
-                ]
+            answers = iter(["y", "", "y", "", "127.0.0.1", "8787", "zotbridge"])
+
+            result = run_setup_wizard(
+                settings,
+                input_fn=lambda _: next(answers),
+                secret_fn=lambda _: "secret-api-key",
+                client_factory=FakeWizardClient,
             )
 
-            with patch(
-                "zotero_headless.setup_wizard.autodiscover_settings",
-                return_value=FakeDiscoveredSettings(),
-            ):
-                result = run_setup_wizard(
-                    settings,
-                    input_fn=lambda _: next(answers),
-                    secret_fn=lambda _: "secret-api-key",
-                    client_factory=FakeWizardClient,
-                )
-
             self.assertEqual(result.settings.user_id, 123)
+            self.assertEqual(result.settings.api_key, "secret-api-key")
             self.assertEqual(
                 result.settings.remote_library_ids,
                 ["user:123", "group:456", "group:789"],
@@ -130,31 +91,14 @@ class SetupWizardTests(unittest.TestCase):
     def test_remote_wizard_can_select_subset_and_custom_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(state_dir=tmp)
-            answers = iter(
-                [
-                    str(Path(tmp) / "Zotero"),
-                    "",
-                    "y",
-                    "",
-                    "n",
-                    "2,3",
-                    "2",
-                    "127.0.0.1",
-                    "8787",
-                    "zotero-headless",
-                ]
-            )
+            answers = iter(["y", "", "n", "2,3", "2", "127.0.0.1", "8787", "zotbridge"])
 
-            with patch(
-                "zotero_headless.setup_wizard.autodiscover_settings",
-                return_value=FakeDiscoveredSettings(),
-            ):
-                result = run_setup_wizard(
-                    settings,
-                    input_fn=lambda _: next(answers),
-                    secret_fn=lambda _: "secret-api-key",
-                    client_factory=FakeWizardClient,
-                )
+            result = run_setup_wizard(
+                settings,
+                input_fn=lambda _: next(answers),
+                secret_fn=lambda _: "secret-api-key",
+                client_factory=FakeWizardClient,
+            )
 
             self.assertEqual(result.settings.remote_library_ids, ["group:456", "group:789"])
             self.assertEqual(result.settings.default_library_id, "group:789")
@@ -168,13 +112,7 @@ class SetupWizardTests(unittest.TestCase):
                 remote_library_ids=["user:123", "group:456"],
                 default_library_id="user:123",
             )
-            answers = iter(
-                [
-                    "",
-                    "",
-                    "",
-                ]
-            )
+            answers = iter(["", "", ""])
 
             result = run_setup_wizard(
                 settings,
@@ -188,97 +126,48 @@ class SetupWizardTests(unittest.TestCase):
             self.assertEqual(result.settings.remote_library_ids, ["user:999", "group:321"])
             self.assertEqual(result.settings.default_library_id, "user:999")
 
-    def test_local_mode_only_updates_local_install_paths(self):
+    def test_libraries_mode_reuses_existing_account_and_reselects_libraries(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(
                 state_dir=tmp,
                 api_key="secret",
                 user_id=123,
-                remote_library_ids=["user:123"],
-                default_library_id="user:123",
+                remote_library_ids=["group:456"],
+                default_library_id="group:456",
             )
-            answers = iter(
-                [
-                    str(Path(tmp) / "Zotero"),
-                    "/usr/bin/zotero",
-                ]
+            answers = iter(["", "n", "1,3", "2"])
+
+            result = run_setup_wizard(
+                settings,
+                mode="libraries",
+                input_fn=lambda _: next(answers),
+                secret_fn=lambda _: "",
+                client_factory=FakeWizardClient,
             )
 
-            with patch(
-                "zotero_headless.setup_wizard.autodiscover_settings",
-                return_value=FakeDiscoveredSettings(
-                    data_dir=str(Path(tmp) / "Zotero"),
-                    zotero_bin="/usr/bin/zotero",
-                ),
-            ):
-                result = run_setup_wizard(
-                    settings,
-                    mode="local",
-                    input_fn=lambda _: next(answers),
-                    secret_fn=lambda _: "",
-                )
-
-            self.assertEqual(result.settings.data_dir, str(Path(tmp) / "Zotero"))
-            self.assertEqual(result.settings.zotero_bin, "/usr/bin/zotero")
             self.assertEqual(result.settings.api_key, "secret")
-            self.assertEqual(result.settings.remote_library_ids, ["user:123"])
+            self.assertEqual(result.settings.remote_library_ids, ["user:123", "group:789"])
+            self.assertEqual(result.settings.default_library_id, "group:789")
 
-    def test_full_mode_can_skip_local_desktop_interoperability(self):
+    def test_full_mode_preserves_runtime_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
-            settings = Settings(state_dir=tmp)
-            answers = iter(
-                [
-                    "skip",
-                    "",
-                    "",
-                    "127.0.0.1",
-                    "8787",
-                    "zotero-headless",
-                ]
+            settings = Settings(
+                state_dir=tmp,
+                daemon_host="0.0.0.0",
+                daemon_port=9999,
+                qmd_collection="old-collection",
+            )
+            answers = iter(["n", "", "", "new-collection"])
+
+            result = run_setup_wizard(
+                settings,
+                input_fn=lambda _: next(answers),
+                secret_fn=lambda _: "",
             )
 
-            with patch(
-                "zotero_headless.setup_wizard.autodiscover_settings",
-                return_value=FakeDiscoveredSettings(),
-            ):
-                result = run_setup_wizard(
-                    settings,
-                    input_fn=lambda _: next(answers),
-                    secret_fn=lambda _: "",
-                )
-
-            self.assertIsNone(result.settings.data_dir)
-            self.assertIsNone(result.settings.api_key)
-
-    def test_full_mode_uses_autodiscovered_local_paths_without_prompting(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            data_dir = str(Path(tmp) / "Zotero")
-            zotero_bin = "/usr/bin/zotero"
-            settings = Settings(state_dir=tmp, data_dir=data_dir, zotero_bin=zotero_bin)
-            prompts: list[str] = []
-            answers = iter(
-                [
-                    "",
-                    "127.0.0.1",
-                    "8787",
-                    "zotero-headless",
-                ]
-            )
-
-            with patch(
-                "zotero_headless.setup_wizard.autodiscover_settings",
-                return_value=FakeDiscoveredSettings(data_dir=data_dir, zotero_bin=zotero_bin),
-            ):
-                result = run_setup_wizard(
-                    settings,
-                    input_fn=lambda prompt: prompts.append(prompt) or next(answers),
-                    secret_fn=lambda _: "",
-                )
-
-            self.assertEqual(result.settings.data_dir, data_dir)
-            self.assertEqual(result.settings.zotero_bin, zotero_bin)
-            self.assertFalse(any("Zotero data directory" in prompt for prompt in prompts))
-            self.assertFalse(any("Zotero desktop binary" in prompt for prompt in prompts))
+            self.assertEqual(result.settings.daemon_host, "0.0.0.0")
+            self.assertEqual(result.settings.daemon_port, 9999)
+            self.assertEqual(result.settings.qmd_collection, "new-collection")
 
 
 if __name__ == "__main__":

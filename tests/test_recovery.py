@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from zotero_headless.config import Settings
-from zotero_headless.core import CanonicalStore, ChangeType, EntityType
-from zotero_headless.recovery import RecoveryService
+from zotbridge.config import Settings
+from zotbridge.core import CanonicalStore, ChangeType, EntityType
+from zotbridge.recovery import RecoveryService
 
 
 class RecoveryServiceTests(unittest.TestCase):

@@ -1,41 +1,41 @@
 import unittest
 
-from zotero_headless.cli_ui import render_install_result, render_update_result_rich, render_version_payload_rich
+from zotbridge.cli_ui import render_install_result, render_update_result_rich, render_version_payload_rich
 
 
 class CliUiTests(unittest.TestCase):
     def test_render_install_result_uses_notes_label_for_optional_hints(self):
         rendered = render_install_result(
             {
-                "target": "openclaw",
+                "target": "codex",
                 "installed": True,
-                "path": "/tmp/home/.openclaw/openclaw.json",
+                "path": "/tmp/home/.codex/skills/zotbridge/SKILL.md",
                 "notes": [
-                    "Already ran `openclaw plugins install -l /tmp/plugin`.",
-                    "Already ran `openclaw plugins enable zotero`.",
+                    "Existing skill content was replaced.",
+                    "MCP setup is managed separately.",
                 ],
             },
-            heading="Plugin installed",
+            heading="Skill installed",
         )
 
         self.assertIn("Notes:", rendered)
         self.assertNotIn("Next steps:", rendered)
 
-    def test_render_install_result_does_not_label_failed_plugin_as_installed(self):
+    def test_render_install_result_does_not_label_failed_setup_as_installed(self):
         rendered = render_install_result(
             {
-                "target": "openclaw",
+                "target": "cursor",
                 "installed": False,
                 "written": False,
-                "path": "/tmp/home/.openclaw/openclaw.json",
-                "reason": "openclaw_not_found",
-                "instructions": ["Run `openclaw plugins install -l /tmp/plugin`."],
+                "path": "/tmp/project/.cursor/mcp.json",
+                "reason": "config_not_found",
+                "instructions": ["Run `zotbridge setup add cursor` from the project root."],
             },
-            heading="Plugin installed",
+            heading="Setup applied",
         )
 
-        self.assertIn("Plugin not installed", rendered)
-        self.assertIn("Reason: The `openclaw` CLI is not available on PATH.", rendered)
+        self.assertIn("Setup not applied", rendered)
+        self.assertIn("Reason: The target config file does not exist yet.", rendered)
 
     def test_render_update_result_rich_includes_version_transition(self):
         try:
@@ -52,7 +52,7 @@ class CliUiTests(unittest.TestCase):
                     "before_version": "0.2.0",
                     "after_version": "0.2.0",
                     "duration_seconds": 0.4,
-                    "plan": {"method": "uv-tool", "command": ["uv", "tool", "upgrade", "zotero-headless"]},
+                    "plan": {"method": "uv-tool", "command": ["uv", "tool", "upgrade", "zotbridge"]},
                     "stderr": "Nothing to upgrade",
                 }
             )
@@ -70,18 +70,18 @@ class CliUiTests(unittest.TestCase):
         console.print(
             render_version_payload_rich(
                 {
-                    "package": "zotero-headless",
+                    "package": "zotbridge",
                     "version": "0.2.0",
                     "install_method": "uv-tool",
-                    "executable": "zhl",
+                    "executable": "zotbridge",
                     "python": "/usr/bin/python3",
-                    "aliases_found": ["zhl", "zotero-headless"],
+                    "aliases_found": ["zotbridge", "zotbridge-daemon", "zotbridge-mcp"],
                 }
             )
         )
         rendered = console.export_text()
-        self.assertIn("zotero-headless", rendered)
-        self.assertIn("zhl, zotero-headless", rendered)
+        self.assertIn("zotbridge", rendered)
+        self.assertIn("zotbridge, zotbridge-daemon, zotbridge-mcp", rendered)
 
 
 if __name__ == "__main__":

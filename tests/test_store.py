@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from zotero_headless.store import MirrorStore
+from zotbridge.store import MirrorStore
 
 
 class MirrorStoreTests(unittest.TestCase):

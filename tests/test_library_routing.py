@@ -2,31 +2,29 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from zotero_headless.core import CanonicalStore
-from zotero_headless.library_routing import merged_libraries, prefers_canonical_reads, prefers_canonical_writes
-from zotero_headless.store import MirrorStore
+from zotbridge.core import CanonicalStore
+from zotbridge.library_routing import merged_libraries, prefers_canonical_reads, prefers_canonical_writes
+from zotbridge.store import MirrorStore
 
 
 class LibraryRoutingTests(unittest.TestCase):
-    def test_prefers_canonical_reads_for_headless_remote_and_local_canonical(self):
+    def test_prefers_canonical_reads_for_headless_and_remote_canonical(self):
         with tempfile.TemporaryDirectory() as tmp:
             canonical = CanonicalStore(Path(tmp) / "canonical.sqlite")
             canonical.upsert_library("headless:demo", name="Demo", source="headless")
             canonical.upsert_library("user:123", name="Remote Demo", source="remote-sync")
-            canonical.upsert_library("local:1", name="Local Demo", source="local-desktop")
 
             self.assertTrue(prefers_canonical_reads(canonical, "headless:demo"))
             self.assertTrue(prefers_canonical_reads(canonical, "user:123"))
-            self.assertTrue(prefers_canonical_reads(canonical, "local:1"))
 
-    def test_prefers_canonical_writes_excludes_local_libraries(self):
+    def test_prefers_canonical_writes_for_any_canonical_library(self):
         with tempfile.TemporaryDirectory() as tmp:
             canonical = CanonicalStore(Path(tmp) / "canonical.sqlite")
             canonical.upsert_library("user:123", name="Remote Demo", source="remote-sync")
-            canonical.upsert_library("local:1", name="Local Demo", source="local-desktop")
+            canonical.upsert_library("headless:staged", name="Staged Demo")
 
             self.assertTrue(prefers_canonical_writes(canonical, "user:123"))
-            self.assertFalse(prefers_canonical_writes(canonical, "local:1"))
+            self.assertTrue(prefers_canonical_writes(canonical, "headless:staged"))
 
     def test_merged_libraries_prefers_canonical_entries(self):
         with tempfile.TemporaryDirectory() as tmp:

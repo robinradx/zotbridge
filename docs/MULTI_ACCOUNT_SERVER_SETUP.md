@@ -1,16 +1,16 @@
 # Multi-Account Server Setup
 
-This guide explains how to run `zotero-headless` for two or more separate Zotero accounts on one machine.
+This guide explains how to run zotbridge for two or more separate Zotero accounts on one machine.
 
 The current model is:
 
-- one `zotero-headless` profile = one Zotero API key
+- one zotbridge profile = one Zotero API key
 - one profile can sync one personal library plus any group libraries visible to that account
 - multiple separate personal accounts require multiple separate profiles
 
 The recommended approach is:
 
-- one shared installation of `zotero-headless`
+- one shared installation of the `zotbridge` package
 - one named profile per person
 - one daemon instance per person
 - optional wrapper command per person
@@ -28,10 +28,10 @@ Suggested daemon ports:
 
 ## Why This Works
 
-`zotero-headless` supports named profiles through:
+zotbridge supports named profiles through:
 
 - `--profile <name>`
-- `ZOTERO_HEADLESS_PROFILE=<name>`
+- `ZOTBRIDGE_PROFILE=<name>`
 
 Each profile gets its own saved settings, and if a profile does not set `state_dir` explicitly, it gets an isolated default state directory automatically.
 
@@ -41,7 +41,7 @@ That means one machine can host multiple independent runtime profiles as long as
 
 Before starting:
 
-- `zotero-headless` is installed and available as `zhl`
+- the `zotbridge` package is installed and available as `zotbridge`
 - each person has their own Zotero API key
 - each person knows which personal and group libraries they want enabled
 - the machine has a directory where persistent runtime state can be stored
@@ -51,7 +51,7 @@ Before starting:
 Run:
 
 ```bash
-zhl --profile alice setup start
+zotbridge --profile alice setup start
 ```
 
 During setup:
@@ -64,8 +64,8 @@ During setup:
 After setup, verify:
 
 ```bash
-zhl --profile alice --json capabilities
-zhl --profile alice sync discover
+zotbridge --profile alice --json capabilities
+zotbridge --profile alice sync discover
 ```
 
 ## Step 2: Configure The Second User
@@ -73,7 +73,7 @@ zhl --profile alice sync discover
 Run:
 
 ```bash
-zhl --profile bob setup start
+zotbridge --profile bob setup start
 ```
 
 During setup:
@@ -86,8 +86,8 @@ During setup:
 After setup, verify:
 
 ```bash
-zhl --profile bob --json capabilities
-zhl --profile bob sync discover
+zotbridge --profile bob --json capabilities
+zotbridge --profile bob sync discover
 ```
 
 ## Step 3: Start Separate Daemons
@@ -95,13 +95,13 @@ zhl --profile bob sync discover
 Start Alice:
 
 ```bash
-zhl --profile alice daemon serve --host 127.0.0.1 --port 8787 --sync-interval 300
+zotbridge --profile alice daemon serve --host 127.0.0.1 --port 8787 --sync-interval 300
 ```
 
 Start Bob:
 
 ```bash
-zhl --profile bob daemon serve --host 127.0.0.1 --port 8788 --sync-interval 300
+zotbridge --profile bob daemon serve --host 127.0.0.1 --port 8788 --sync-interval 300
 ```
 
 These can run under:
@@ -114,46 +114,46 @@ These can run under:
 
 ## Step 4: Optional Wrapper Commands
 
-Create `/srv/zotero-headless/bin/zhl-alice`:
+Create `/srv/zotbridge/bin/zotbridge-alice`:
 
 ```sh
 #!/bin/sh
-exec zhl --profile alice "$@"
+exec zotbridge --profile alice "$@"
 ```
 
-Create `/srv/zotero-headless/bin/zhl-bob`:
+Create `/srv/zotbridge/bin/zotbridge-bob`:
 
 ```sh
 #!/bin/sh
-exec zhl --profile bob "$@"
+exec zotbridge --profile bob "$@"
 ```
 
 Make them executable:
 
 ```bash
-chmod +x /srv/zotero-headless/bin/zhl-alice
-chmod +x /srv/zotero-headless/bin/zhl-bob
+chmod +x /srv/zotbridge/bin/zotbridge-alice
+chmod +x /srv/zotbridge/bin/zotbridge-bob
 ```
 
 Optional:
 
-- add `/srv/zotero-headless/bin` to `PATH`
-- create matching wrapper commands for `zhl-daemon` and `zhl-mcp` if needed
+- add `/srv/zotbridge/bin` to `PATH`
+- create matching wrapper commands for `zotbridge-daemon` and `zotbridge-mcp` if needed
 
 ## Step 5: Verify Isolation
 
 Run:
 
 ```bash
-zhl --profile alice daemon status
-zhl --profile bob daemon status
+zotbridge --profile alice daemon status
+zotbridge --profile bob daemon status
 ```
 
 Then verify each profile reports its own default library and state path:
 
 ```bash
-zhl --profile alice --json capabilities
-zhl --profile bob --json capabilities
+zotbridge --profile alice --json capabilities
+zotbridge --profile bob --json capabilities
 ```
 
 Check each daemon health endpoint:
@@ -185,17 +185,17 @@ Follow these rules:
 Examples:
 
 ```bash
-zhl --profile alice sync pull --library user:ALICE_USER_ID
-zhl --profile alice sync conflicts --library user:ALICE_USER_ID
-zhl --profile bob sync pull --library user:BOB_USER_ID
-zhl --profile bob sync conflicts --library user:BOB_USER_ID
+zotbridge --profile alice sync pull --library user:ALICE_USER_ID
+zotbridge --profile alice sync conflicts --library user:ALICE_USER_ID
+zotbridge --profile bob sync pull --library user:BOB_USER_ID
+zotbridge --profile bob sync conflicts --library user:BOB_USER_ID
 ```
 
 If the exact personal library IDs are not known ahead of time, discover them with:
 
 ```bash
-zhl --profile alice sync discover
-zhl --profile bob sync discover
+zotbridge --profile alice sync discover
+zotbridge --profile bob sync discover
 ```
 
 ## Optional: Separate OS Users
@@ -204,7 +204,7 @@ If the machine supports separate Unix users, that is even cleaner.
 
 In that model:
 
-- install `zotero-headless` once globally or once per user
+- install the `zotbridge` package once globally or once per user
 - let each Unix user keep their own default config path
 - let each Unix user keep their own default state path
 - run each daemon under that Unix account
@@ -217,11 +217,11 @@ Example unit for Alice:
 
 ```ini
 [Unit]
-Description=zotero-headless daemon for Alice
+Description=zotbridge daemon for Alice
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/zhl --profile alice daemon serve --host 127.0.0.1 --port 8787 --sync-interval 300
+ExecStart=/usr/local/bin/zotbridge --profile alice daemon serve --host 127.0.0.1 --port 8787 --sync-interval 300
 Restart=always
 RestartSec=5
 
@@ -248,12 +248,10 @@ Separate Python environments are not necessary unless the machine already requir
 
 ## If You Want To Automate This Further
 
-Possible future improvements in code:
+Possible future improvements:
 
-- first-class named profiles
-- a `zhl --profile <name>` flag
 - generated per-profile wrapper scripts
 - templated service installation
 - a true multi-tenant daemon model with per-request account selection
 
-For the current use case, none of that is required. Separate profile directories plus separate daemon instances are enough.
+For the current use case, separate profile directories plus separate daemon instances are enough.

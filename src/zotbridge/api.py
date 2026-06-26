@@ -1,0 +1,366 @@
+from __future__ import annotations
+
+import json
+import time
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from .adapters.web_sync import CanonicalWebSyncAdapter
+from . import __version__
+from .capabilities import get_capabilities
+from .config import Settings
+from .core import CanonicalStore, EntityType
+from .daemon import current_daemon_status
+from .library_routing import merged_libraries, prefers_canonical_reads
+from .observability import build_metrics_text, read_jobs_state, read_runtime_state, record_http_request
+from .qmd import QmdAutoIndexer, QmdClient
+from .recovery import RecoveryService
+from .service import BridgeService
+from .store import MirrorStore
+from .sync import SyncService
+from .web_api import ZoteroWebClient
+
+
+def make_handler(settings: Settings, store: MirrorStore):
+    canonical = CanonicalStore(settings.resolved_canonical_db())
+    qmd_indexer = QmdAutoIndexer(settings)
+    sync_service = SyncService(settings, store, qmd_indexer=qmd_indexer)
+    service = BridgeService(settings, store, canonical, qmd_indexer=qmd_indexer)
+    qmd = QmdClient(settings)
+    recovery = RecoveryService(settings, canonical=canonical, qmd_indexer=qmd_indexer)
+
+    def canonical_sync() -> CanonicalWebSyncAdapter:
+        return CanonicalWebSyncAdapter(canonical, ZoteroWebClient(settings), qmd_indexer=qmd_indexer)
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = f"zotbridge/{__version__}"
+
+        def log_message(self, format: str, *args) -> None:
+            return
+
+        def _record_request(self, status: int) -> None:
+            started_at = getattr(self, "_request_started_at", None)
+            if started_at is None:
+                return
+            self._request_started_at = None
+            record_http_request(
+                settings,
+                method=self.command,
+                path=self.path,
+                status=status,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                remote_addr=self.client_address[0] if self.client_address else None,
+            )
+
+        def _json_response(self, status: int, payload):
+            body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self._record_request(status)
+
+        def _text_response(self, status: int, body: str, *, content_type: str = "text/plain; charset=utf-8"):
+            encoded = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            self._record_request(status)
+
+        def _read_json(self) -> dict:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0:
+                return {}
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+
+        def do_GET(self):
+            self._request_started_at = time.perf_counter()
+            parsed = urlparse(self.path)
+            params = parse_qs(parsed.query)
+            parts = [part for part in parsed.path.split("/") if part]
+
+            if parsed.path == "/health":
+                return self._json_response(200, {"ok": True})
+            if parsed.path == "/capabilities":
+                return self._json_response(200, get_capabilities(settings))
+            if parsed.path == "/daemon/status":
+                return self._json_response(200, current_daemon_status(settings).to_dict())
+            if parsed.path == "/daemon/runtime":
+                return self._json_response(200, read_runtime_state(settings) or {})
+            if parsed.path == "/daemon/jobs":
+                return self._json_response(200, read_jobs_state(settings))
+            if parsed.path == "/metrics":
+                return self._text_response(200, build_metrics_text(settings))
+            if parsed.path == "/core/status":
+                return self._json_response(200, canonical.status())
+            if parsed.path == "/core/libraries":
+                return self._json_response(200, {"libraries": canonical.list_libraries()})
+            if parsed.path == "/core/changes":
+                library_id = params.get("library_id", [None])[0]
+                limit = int(params.get("limit", ["100"])[0])
+                return self._json_response(200, {"changes": canonical.list_changes(library_id=library_id, limit=limit)})
+            if parsed.path == "/recovery/repositories":
+                return self._json_response(200, {"repositories": recovery.repositories()})
+            if parsed.path == "/recovery/snapshots":
+                limit = int(params.get("limit", ["20"])[0])
+                return self._json_response(200, {"snapshots": recovery.list_snapshots(limit=limit)})
+            if len(parts) == 3 and parts[0] == "recovery" and parts[1] == "snapshots":
+                return self._json_response(200, recovery.get_snapshot(parts[2]))
+            if parsed.path == "/recovery/restores":
+                limit = int(params.get("limit", ["20"])[0])
+                return self._json_response(200, {"restores": recovery.list_restore_runs(limit=limit)})
+            if len(parts) == 3 and parts[0] == "recovery" and parts[1] == "restores":
+                return self._json_response(200, recovery.get_restore_run(parts[2]))
+            if parsed.path == "/sync/conflicts":
+                library_id = params.get("library_id", [None])[0]
+                if not library_id:
+                    return self._json_response(400, {"error": "library_id is required"})
+                entity_type_name = params.get("entity_type", [None])[0]
+                entity_type = EntityType(entity_type_name) if entity_type_name else None
+                return self._json_response(200, {"conflicts": canonical_sync().list_conflicts(library_id, entity_type=entity_type)})
+            if parsed.path == "/libraries":
+                return self._json_response(200, {"libraries": merged_libraries(store, canonical)})
+            if parsed.path == "/search/query":
+                query = params.get("q", [""])[0]
+                library_id = params.get("library_id", [None])[0]
+                limit = int(params.get("limit", ["10"])[0])
+                return self._json_response(200, {"results": qmd.search("query", query, limit=limit, library_id=library_id)})
+            if parsed.path == "/search/vsearch":
+                query = params.get("q", [""])[0]
+                library_id = params.get("library_id", [None])[0]
+                limit = int(params.get("limit", ["10"])[0])
+                return self._json_response(200, {"results": qmd.search("vsearch", query, limit=limit, library_id=library_id)})
+            if parsed.path == "/search/search":
+                query = params.get("q", [""])[0]
+                library_id = params.get("library_id", [None])[0]
+                limit = int(params.get("limit", ["10"])[0])
+                return self._json_response(200, {"results": qmd.search("search", query, limit=limit, library_id=library_id)})
+            if parsed.path == "/search/get":
+                target = params.get("target", [""])[0]
+                if not target:
+                    return self._json_response(400, {"error": "target is required"})
+                line_from = params.get("from", [None])[0]
+                line_count = params.get("count", [None])[0]
+                return self._json_response(
+                    200,
+                    qmd.get(
+                        target,
+                        line_from=int(line_from) if line_from else None,
+                        line_count=int(line_count) if line_count else None,
+                    ),
+                )
+
+            if len(parts) >= 3 and parts[0] == "libraries":
+                library_id = parts[1]
+                if len(parts) == 3 and parts[2] in {"items", "collections", "searches"}:
+                    kind = parts[2][:-1]
+                    limit = int(params.get("limit", ["100"])[0])
+                    query = params.get("q", [None])[0]
+                    if prefers_canonical_reads(canonical, library_id):
+                        entity_type = {"item": "item", "collection": "collection", "search": "search"}[kind]
+                        return self._json_response(
+                            200,
+                            {"results": canonical.list_entities(library_id, entity_type, limit=limit, query=query)},
+                        )
+                    return self._json_response(
+                        200,
+                        {"results": store.list_objects(library_id, kind, limit=limit, query=query)},
+                    )
+                if len(parts) == 4 and parts[2] == "items":
+                    item = (
+                        canonical.get_entity(library_id, "item", parts[3])
+                        if prefers_canonical_reads(canonical, library_id)
+                        else store.get_object(library_id, "item", parts[3])
+                    )
+                    if not item:
+                        return self._json_response(404, {"error": "Item not found"})
+                    return self._json_response(200, item)
+                if len(parts) == 4 and parts[2] == "collections":
+                    collection = (
+                        canonical.get_entity(library_id, "collection", parts[3])
+                        if prefers_canonical_reads(canonical, library_id)
+                        else store.get_object(library_id, "collection", parts[3])
+                    )
+                    if not collection:
+                        return self._json_response(404, {"error": "Collection not found"})
+                    return self._json_response(200, collection)
+            return self._json_response(404, {"error": "Not found"})
+
+        def do_POST(self):
+            self._request_started_at = time.perf_counter()
+            parsed = urlparse(self.path)
+            body = self._read_json()
+            parts = [part for part in parsed.path.split("/") if part]
+            if parsed.path == "/sync/discover":
+                return self._json_response(200, {"libraries": canonical_sync().discover_libraries()})
+            if parsed.path == "/sync/pull":
+                return self._json_response(200, {"result": canonical_sync().pull_library(body["library_id"])})
+            if parsed.path == "/sync/push":
+                return self._json_response(200, {"result": canonical_sync().push_changes(body["library_id"])})
+            if parsed.path == "/sync/conflicts/rebase":
+                return self._json_response(
+                    200,
+                    {
+                        "result": canonical_sync().rebase_conflict_keep_local(
+                            body["library_id"],
+                            EntityType(body["entity_type"]),
+                            body["entity_key"],
+                        )
+                    },
+                )
+            if parsed.path == "/sync/conflicts/accept-remote":
+                return self._json_response(
+                    200,
+                    {
+                        "result": canonical_sync().accept_remote_conflict(
+                            body["library_id"],
+                            EntityType(body["entity_type"]),
+                            body["entity_key"],
+                        )
+                    },
+                )
+            if parsed.path == "/sync/mirror/discover":
+                return self._json_response(200, {"libraries": sync_service.discover_remote_libraries()})
+            if parsed.path == "/sync/mirror/pull":
+                library_id = body.get("library_id")
+                if library_id:
+                    return self._json_response(200, {"result": sync_service.sync_remote_library(library_id).__dict__})
+                results = [sync_service.sync_remote_library(lib["library_id"]).__dict__ for lib in store.list_libraries() if lib["source"] == "remote"]
+                return self._json_response(200, {"results": results})
+            if parsed.path == "/recovery/snapshots":
+                return self._json_response(200, recovery.create_snapshot(reason=str(body.get("reason") or "manual")))
+            if parsed.path == "/recovery/restore/plan":
+                return self._json_response(
+                    200,
+                    recovery.plan_restore(
+                        snapshot_id=str(body["snapshot_id"]),
+                        library_id=body.get("library_id"),
+                    ),
+                )
+            if parsed.path == "/recovery/restore/execute":
+                return self._json_response(
+                    200,
+                    recovery.execute_restore(
+                        snapshot_id=str(body["snapshot_id"]),
+                        library_id=body.get("library_id"),
+                        confirm=bool(body.get("confirm")),
+                        push_remote=bool(body.get("push_remote")),
+                    ),
+                )
+            if len(parts) == 4 and parts[0] == "recovery" and parts[1] == "snapshots" and parts[3] == "verify":
+                return self._json_response(200, recovery.verify_snapshot(parts[2]))
+            if len(parts) == 4 and parts[0] == "recovery" and parts[1] == "snapshots" and parts[3] == "push":
+                return self._json_response(
+                    200,
+                    recovery.push_snapshot(parts[2], repository=str(body["repository"])),
+                )
+            if len(parts) == 4 and parts[0] == "recovery" and parts[1] == "snapshots" and parts[3] == "pull":
+                return self._json_response(
+                    200,
+                    recovery.pull_snapshot(parts[2], repository=str(body["repository"])),
+                )
+            if parsed.path == "/search/export":
+                library_id = body.get("library_id")
+                if library_id:
+                    if prefers_canonical_reads(canonical, library_id):
+                        return self._json_response(200, qmd.export_from_canonical(canonical, library_id))
+                    return self._json_response(200, qmd.export_from_store(store, library_id))
+                exported = 0
+                by_backend = {"mirror_exported": 0, "canonical_exported": 0}
+                for library in merged_libraries(store, canonical):
+                    library_id = library["library_id"]
+                    if prefers_canonical_reads(canonical, library_id):
+                        result = qmd.export_from_canonical(canonical, library_id)
+                        by_backend["canonical_exported"] += int(result["exported"])
+                    else:
+                        result = qmd.export_from_store(store, library_id)
+                        by_backend["mirror_exported"] += int(result["exported"])
+                    exported += int(result["exported"])
+                return self._json_response(
+                    200,
+                    {
+                        "exported": exported,
+                        "mirror_exported": by_backend["mirror_exported"],
+                        "canonical_exported": by_backend["canonical_exported"],
+                        "export_dir": str(settings.resolved_export_dir()),
+                        "collection": settings.qmd_collection,
+                    },
+                )
+            if parsed.path == "/core/libraries":
+                library_id = body["library_id"]
+                library = canonical.upsert_library(
+                    library_id,
+                    name=body["name"],
+                    source=body.get("source", "headless"),
+                    editable=bool(body.get("editable", True)),
+                    metadata=body.get("metadata") or {},
+                )
+                return self._json_response(200, library)
+            if len(parts) == 3 and parts[0] == "libraries" and parts[2] == "items":
+                library_id = parts[1]
+                created = service.create_item(library_id, body)
+                return self._json_response(200, created)
+            if len(parts) == 3 and parts[0] == "libraries" and parts[2] == "collections":
+                library_id = parts[1]
+                created = service.create_collection(library_id, body)
+                return self._json_response(200, created)
+            return self._json_response(404, {"error": "Not found"})
+
+        def do_PATCH(self):
+            self._request_started_at = time.perf_counter()
+            parsed = urlparse(self.path)
+            body = self._read_json()
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) == 4 and parts[0] == "libraries" and parts[2] == "items":
+                library_id, item_key = parts[1], parts[3]
+                try:
+                    updated = service.update_item(library_id, item_key, body, replace=False)
+                except KeyError:
+                    return self._json_response(404, {"error": "Item not found"})
+                return self._json_response(200, updated)
+            if len(parts) == 4 and parts[0] == "libraries" and parts[2] == "collections":
+                library_id, collection_key = parts[1], parts[3]
+                try:
+                    updated = service.update_collection(library_id, collection_key, body, replace=False)
+                except KeyError:
+                    return self._json_response(404, {"error": "Collection not found"})
+                return self._json_response(200, updated)
+            return self._json_response(404, {"error": "Not found"})
+
+        def do_DELETE(self):
+            self._request_started_at = time.perf_counter()
+            parsed = urlparse(self.path)
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) == 4 and parts[0] == "libraries" and parts[2] == "items":
+                library_id, item_key = parts[1], parts[3]
+                try:
+                    deleted = service.delete_item(library_id, item_key)
+                except KeyError:
+                    return self._json_response(404, {"error": "Item not found"})
+                return self._json_response(200, deleted)
+            if len(parts) == 4 and parts[0] == "libraries" and parts[2] == "collections":
+                library_id, collection_key = parts[1], parts[3]
+                try:
+                    deleted = service.delete_collection(library_id, collection_key)
+                except KeyError:
+                    return self._json_response(404, {"error": "Collection not found"})
+                return self._json_response(200, deleted)
+            return self._json_response(404, {"error": "Not found"})
+
+    return Handler
+
+
+def serve_api(settings: Settings, host: str, port: int) -> None:
+    store = MirrorStore(settings.resolved_mirror_db())
+    handler = make_handler(settings, store)
+    server = ThreadingHTTPServer((host, port), handler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()

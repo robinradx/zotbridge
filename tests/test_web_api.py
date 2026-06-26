@@ -4,8 +4,8 @@ import tempfile
 import io
 import zipfile
 
-from zotero_headless.config import Settings
-from zotero_headless.web_api import ZoteroWebClient
+from zotbridge.config import Settings
+from zotbridge.web_api import ZoteroWebClient
 
 
 class InspectingWebClient(ZoteroWebClient):
@@ -202,7 +202,7 @@ class ZoteroWebClientTests(unittest.TestCase):
                 }
             )
             if len(client.calls) == 1:
-                from zotero_headless.web_api import ZoteroApiError
+                from zotbridge.web_api import ZoteroApiError
 
                 raise ZoteroApiError(400, "Bad Request", '{"error":"Invalid property \\"citationKey\\""}')
             return 204, client.next_headers, None
