@@ -1,6 +1,6 @@
 # zotbridge
 
-zotbridge is a Zotero integration layer for agents, apps, and scripts, with Web API sync, HTTP/MCP access, semantic search over libraries, and recoverable headless state. It keeps the local project surface small:
+zotbridge is a Zotero integration layer for agents, apps, and scripts, with Web API sync, HTTP/MCP access, semantic search over libraries, and recoverable headless state. It keeps the local runtime focused:
 
 - canonical SQLite store
 - Zotero Web API sync for personal and group libraries
@@ -9,11 +9,7 @@ zotbridge is a Zotero integration layer for agents, apps, and scripts, with Web 
 - skills for clients that support them
 - recovery snapshots for canonical state and derived artifacts
 
-It no longer ships a Zotero Desktop helper, reads or writes `zotero.sqlite`, or bundles native client plugin projects.
-
-## Current Zotero Baseline
-
-The current tracked Zotero baseline is Zotero `9.0.5`, released June 10, 2026. The runtime avoids depending on Zotero Desktop internals so routine Zotero Desktop changes should not force project updates. Zotero 9 citation-key fields are preserved in normalized item payloads where present, and remote writes use the Web API.
+It no longer ships a Zotero Desktop helper, reads or writes `zotero.sqlite`, or bundles native client plugin projects; compatibility is tracked against Zotero `9.0.5` while relying on the Zotero Web API instead of Desktop internals.
 
 ## Install
 
@@ -143,19 +139,6 @@ zotbridge recovery restore-execute --snapshot <snapshot_id> --library user:12345
 - `src/zotbridge/recovery.py`: snapshots and restore flow
 - `tests/`: Python runtime and integration tests
 - `docs/`: focused CLI, API, MCP, skills, sync, and recovery docs
-
-## Removed Surface
-
-The desktop/helper/plugin surface has been intentionally removed:
-
-- no bundled Zotero Desktop helper workflow
-- no local `zotero.sqlite` adapter
-- no `/local/*` HTTP API routes
-- no `zotero_local_*` MCP tools
-- no plugin install/update commands
-- no packaged client plugin bundles
-
-This keeps the project lighter and better isolated from Zotero Desktop internals.
 
 ## Verification
 
